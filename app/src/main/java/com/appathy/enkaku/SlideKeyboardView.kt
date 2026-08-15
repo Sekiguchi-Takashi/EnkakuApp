@@ -3,8 +3,10 @@ package com.appathy.enkaku
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
@@ -46,6 +48,7 @@ class SlideKeyboardView(context: Context) : View(context) {
     private val colCand = Color.parseColor("#243444")
     private val colCandText = Color.parseColor("#FFD9A0")
     private val colHint = Color.parseColor("#5A6B7C")
+    private val colShadow = Color.parseColor("#0B1119")
 
     private val pKey = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val pText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -252,8 +255,50 @@ class SlideKeyboardView(context: Context) : View(context) {
                 id in K_ALPHA0..(K_ALPHA0 + 5) -> colHead
                 else -> colFunc
             }
-            roundKey(c, rect, if (down) colDown else base)
-            centerText(c, label(id), rect, colText)
+            if (r == ROW_MAIN) {
+                raisedKey(c, rect, if (down) colDown else base, down)
+                val dy = if (down) dp(1.5f) else 0f
+                centerText(c, label(id), RectF(rect.left, rect.top + dy, rect.right, rect.bottom + dy), colText)
+            } else {
+                roundKey(c, rect, if (down) colDown else base)
+                centerText(c, label(id), rect, colText)
+            }
+        }
+    }
+
+    private fun shade(color: Int, factor: Float): Int {
+        val r = (Color.red(color) * factor).toInt().coerceIn(0, 255)
+        val g = (Color.green(color) * factor).toInt().coerceIn(0, 255)
+        val b = (Color.blue(color) * factor).toInt().coerceIn(0, 255)
+        return Color.rgb(r, g, b)
+    }
+
+    // 立体キー: 下に影 → 上明るく下暗いグラデーション → 上端ハイライト
+    private fun raisedKey(c: Canvas, r: RectF, color: Int, pressed: Boolean) {
+        val rad = dp(7f)
+        val lift = if (pressed) dp(1.5f) else 0f
+        val body = RectF(r.left, r.top + lift, r.right, r.bottom + lift)
+
+        if (!pressed) {
+            pKey.shader = null
+            pKey.color = colShadow
+            c.drawRoundRect(RectF(r.left, r.top + dp(2f), r.right, r.bottom + dp(2.5f)), rad, rad, pKey)
+        }
+
+        pKey.shader = LinearGradient(
+            body.left, body.top, body.left, body.bottom,
+            shade(color, if (pressed) 1.0f else 1.35f), shade(color, if (pressed) 0.85f else 0.9f),
+            Shader.TileMode.CLAMP
+        )
+        c.drawRoundRect(body, rad, rad, pKey)
+        pKey.shader = null
+
+        if (!pressed) {
+            pKey.color = shade(color, 1.6f)
+            c.drawRoundRect(
+                RectF(body.left + dp(3f), body.top + dp(1.5f), body.right - dp(3f), body.top + dp(3.5f)),
+                dp(2f), dp(2f), pKey
+            )
         }
     }
 
@@ -264,7 +309,9 @@ class SlideKeyboardView(context: Context) : View(context) {
     }
 
     private fun roundKey(c: Canvas, r: RectF, color: Int) {
-        pKey.color = color; c.drawRoundRect(r, dp(7f), dp(7f), pKey)
+        pKey.shader = null
+        pKey.color = color
+        c.drawRoundRect(r, dp(7f), dp(7f), pKey)
     }
 
     private fun drawStrip(c: Canvas) {
