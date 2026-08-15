@@ -20,12 +20,13 @@ class SlideKeyboardView(context: Context) : View(context) {
         fun onSpace()
         fun onCursor(left: Boolean)
         fun onTransformLast()
+        fun onTransformLastBack()
         fun onNextIme()
         fun onHide()
         fun onSwitchLayout()
         fun onModeChanged(japanese: Boolean)
-        fun onGboard()
-        fun onConvertToggled(on: Boolean)
+        fun onMenu()
+        fun onTextSlot(button: Int)
     }
 
     var listener: Listener? = null
@@ -63,8 +64,7 @@ class SlideKeyboardView(context: Context) : View(context) {
     private val K_ENTER = 17
     private val K_DEL = 18
     private val K_HIDE = 19
-    private val K_GBOARD = 30
-    private val K_CONV = 31
+    private val K_MENU = 30
 
     private val ROW_CAND = 0
     private val ROW_MAIN = 1
@@ -76,7 +76,7 @@ class SlideKeyboardView(context: Context) : View(context) {
     private val maxCand = 5
 
     private var japanese = true
-    private var convertOn = true
+    private var textMode = false
     private var candidates: List<String> = emptyList()
     private val sideW = dp(52f)
 
@@ -112,7 +112,6 @@ class SlideKeyboardView(context: Context) : View(context) {
     init {
         val sp = context.getSharedPreferences("enkaku", Context.MODE_PRIVATE)
         japanese = sp.getBoolean("jp_mode", true)
-        convertOn = sp.getBoolean("conv_on", true)
     }
 
     fun setCandidates(list: List<String>) {
@@ -121,7 +120,12 @@ class SlideKeyboardView(context: Context) : View(context) {
     }
 
     fun isJapanese(): Boolean = japanese
-    fun isConvertOn(): Boolean = convertOn
+
+    // マルチモニタをテキストモード（1〜7ボタン）にするか
+    fun setTextMode(on: Boolean) {
+        textMode = on
+        invalidate()
+    }
 
     private fun totalHeight() = gap * 4 + rowH * 3
     private fun rowTop(r: Int) = gap + r * (rowH + gap)
@@ -146,18 +150,13 @@ class SlideKeyboardView(context: Context) : View(context) {
         return RectF(l, t, l + kw, t + rowH)
     }
 
-    private fun gboardRect(): RectF {
+    private fun menuRect(): RectF {
         val t = rowTop(ROW_CAND)
         return RectF(gap, t, gap + sideW, t + rowH)
     }
 
-    private fun convRect(): RectF {
-        val t = rowTop(ROW_CAND)
-        return RectF(width - gap - sideW, t, width - gap, t + rowH)
-    }
-
     private fun candLeft(): Float = gap + sideW + gap
-    private fun candRight(): Float = if (japanese) width - gap - sideW - gap else width - gap
+    private fun candRight(): Float = width - gap
 
     private fun candRect(i: Int, n: Int): RectF {
         val area = candRight() - candLeft()
@@ -171,7 +170,7 @@ class SlideKeyboardView(context: Context) : View(context) {
         Strip.GYO -> KanaTables.expandStrip(stripIdx)
         Strip.ALPHA -> KanaTables.alphaGroups[stripIdx]
         Strip.NUM -> KanaTables.digitStrip
-        Strip.SYM -> KanaTables.symbolStrip
+        Strip.SYM -> if (japanese) KanaTables.symbolStrip else KanaTables.asciiSymbolStrip
         Strip.ROMAN -> KanaTables.romanStrip
         Strip.NONE -> emptyList()
     }
@@ -189,8 +188,7 @@ class SlideKeyboardView(context: Context) : View(context) {
         K_ENTER -> "改行"
         K_DEL -> "削除"
         K_HIDE -> "▽"
-        K_GBOARD -> "G"
-        K_CONV -> "変換"
+        K_MENU -> "⋮"
         else -> ""
     }
 
@@ -206,31 +204,25 @@ class SlideKeyboardView(context: Context) : View(context) {
         drawKeyRow(c, funcIds(), ROW_FUNC)
     }
 
+    // マルチモニタ（左端メニュー ＋ 候補 or テキストボタン）
     private fun drawCandidates(c: Canvas) {
-        val keep = pText.textSize
+        val m = menuRect()
+        roundKey(c, m, if (downKey == K_MENU && !longFired) colDown else colFunc)
+        centerText(c, label(K_MENU), m, colText)
 
-        // 左端: Gboard 切替
-        val g = gboardRect()
-        roundKey(c, g, if (downKey == K_GBOARD && !longFired) colDown else colFunc)
-        centerText(c, label(K_GBOARD), g, colText)
-
-        // 右端: 変換 ON/OFF（日本語モードのみ）
-        if (japanese) {
-            val v = convRect()
-            roundKey(c, v, if (convertOn) colDown else colFunc)
-            pText.textSize = rowH * 0.34f
-            centerText(c, label(K_CONV), v, colText)
-            pText.textSize = keep
+        if (textMode) {
+            for (i in 0 until 7) {
+                val r = candRect(i, 7)
+                roundKey(c, r, if (i == downCand) colDown else colCand)
+                centerText(c, (i + 1).toString(), r, colCandText)
+            }
+            return
         }
 
         val n = candidates.size
         if (n == 0) {
             val r = RectF(candLeft(), rowTop(ROW_CAND), candRight(), rowTop(ROW_CAND) + rowH)
             roundKey(c, r, colCand)
-            pText.textSize = rowH * 0.32f
-            val msg = if (japanese && convertOn) "変換ON：入力すると候補が出ます" else "予測候補"
-            centerText(c, msg, r, colHint)
-            pText.textSize = keep
             return
         }
         for (i in 0 until n) {
@@ -321,7 +313,7 @@ class SlideKeyboardView(context: Context) : View(context) {
     }
 
     private fun candAt(x: Float): Int {
-        val n = candidates.size
+        val n = if (textMode) 7 else candidates.size
         if (n == 0) return -1
         if (x < candLeft() || x > candRight()) return -1
         val area = candRight() - candLeft()
@@ -368,11 +360,8 @@ class SlideKeyboardView(context: Context) : View(context) {
         if (rowAt(y) == ROW_CAND) {
             downCand = -1
             downKey = -1
-            if (x <= gboardRect().right + gap) {
-                downKey = K_GBOARD
-                scheduleLong(K_GBOARD)
-            } else if (japanese && x >= convRect().left - gap) {
-                downKey = K_CONV
+            if (x <= menuRect().right + gap) {
+                downKey = K_MENU
             } else {
                 downCand = candAt(x)
             }
@@ -397,7 +386,7 @@ class SlideKeyboardView(context: Context) : View(context) {
             downKey == K_SYM -> { strip = Strip.SYM; persist = lock; selIdx = 0 }
             downKey == K_ROMAN -> { strip = Strip.ROMAN; persist = lock; selIdx = 0 }
             downKey == K_DEL -> startDelRepeat()
-            downKey == K_FIX || downKey == K_HIDE -> scheduleLong(downKey)
+            downKey == K_FIX || downKey == K_HIDE || downKey == K_DAKU -> scheduleLong(downKey)
         }
         invalidate()
     }
@@ -415,9 +404,12 @@ class SlideKeyboardView(context: Context) : View(context) {
         cancelLong(); cancelRepeat()
         if (longFired) { downKey = -1; downCand = -1; invalidate(); return }
 
-        // 予測候補の確定
+        // マルチモニタの確定
         if (downCand >= 0) {
-            if (committed && downCand < candidates.size) listener?.onCandidate(candidates[downCand])
+            if (committed) {
+                if (textMode) listener?.onTextSlot(downCand + 1)
+                else if (downCand < candidates.size) listener?.onCandidate(candidates[downCand])
+            }
             downCand = -1; invalidate(); return
         }
 
@@ -434,8 +426,7 @@ class SlideKeyboardView(context: Context) : View(context) {
         if (strip != Strip.NONE && persist) { downKey = -1; invalidate(); return }
 
         if (committed) when (downKey) {
-            K_GBOARD -> listener?.onGboard()
-            K_CONV -> toggleConvert()
+            K_MENU -> listener?.onMenu()
             K_FIX -> lock = !lock
             K_MODE -> toggleMode()
             K_DAKU -> listener?.onTransformLast()
@@ -445,13 +436,6 @@ class SlideKeyboardView(context: Context) : View(context) {
         }
         downKey = -1
         invalidate()
-    }
-
-    private fun toggleConvert() {
-        convertOn = !convertOn
-        context.getSharedPreferences("enkaku", Context.MODE_PRIVATE)
-            .edit().putBoolean("conv_on", convertOn).apply()
-        listener?.onConvertToggled(convertOn)
     }
 
     private fun toggleMode() {
@@ -495,8 +479,8 @@ class SlideKeyboardView(context: Context) : View(context) {
             longFired = true
             when (key) {
                 K_FIX -> listener?.onSwitchLayout()
+                K_DAKU -> listener?.onTransformLastBack()
                 K_HIDE -> listener?.onNextIme()
-                K_GBOARD -> listener?.onNextIme()
             }
         }
         longRunnable = r

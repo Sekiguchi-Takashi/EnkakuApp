@@ -1,10 +1,19 @@
 package com.appathy.enkaku
 
+import android.app.Dialog
+import android.content.Intent
+import android.graphics.Color
 import android.inputmethodservice.InputMethodService
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 
 class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboardView.Listener {
 
@@ -14,13 +23,37 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
     private fun savedLayout(): Layout =
         if (prefs().getString("layout", "SLIDE") == "FLICK") Layout.FLICK else Layout.SLIDE
 
-    private var slideView: SlideKeyboardView? = null
+    private fun mode(): String = prefs().getString("mode", Converter.MODE_PREDICT) ?: Converter.MODE_PREDICT
+    private fun grade(): Int = prefs().getInt("grade", 1)
 
-    // 直前に打ち込んだ連続文字列（予測の手がかり。空白/改行/候補確定でリセット）
+    private fun setMode(m: String) {
+        prefs().edit().putString("mode", m).apply()
+        buffer.setLength(0)
+        slideView?.setTextMode(m == Converter.MODE_TEXT)
+        refreshCandidates()
+    }
+
+    private var slideView: SlideKeyboardView? = null
+    private var dialog: Dialog? = null
+
+    // 直前に打ち込んだ連続文字列（変換・予測の読み。空白/改行/確定でリセット）
     private val buffer = StringBuilder()
 
+    override fun onCreate() {
+        super.onCreate()
+        // v1.5: マルチモニタの登録内容を一度だけ初期化する
+        if (!prefs().getBoolean("reset_v15", false)) {
+            Predictor.clear(this)
+            prefs().edit().putBoolean("reset_v15", true).apply()
+        }
+    }
+
     private fun buildView(layout: Layout): View = when (layout) {
-        Layout.SLIDE -> SlideKeyboardView(this).also { it.listener = this; slideView = it }
+        Layout.SLIDE -> SlideKeyboardView(this).also {
+            it.listener = this
+            slideView = it
+            it.setTextMode(mode() == Converter.MODE_TEXT)
+        }
         Layout.FLICK -> FlickKeyboardView(this).also { it.listener = this; slideView = null }
     }
 
@@ -29,27 +62,39 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         buffer.setLength(0)
+        slideView?.setTextMode(mode() == Converter.MODE_TEXT)
         refreshCandidates()
+    }
+
+    override fun onFinishInputView(finishingInput: Boolean) {
+        super.onFinishInputView(finishingInput)
+        dismissDialog()
     }
 
     private fun refreshCandidates() {
         val v = slideView ?: return
-        v.setCandidates(buildCandidates(v.isJapanese(), v.isConvertOn()))
+        v.setCandidates(buildCandidates(v.isJapanese()))
     }
 
-    // 予測（学習済み）を先に、足りない分を内蔵辞書の変換候補で埋める
-    private fun buildCandidates(japanese: Boolean, convertOn: Boolean): List<String> {
+    // モード別のマルチモニタ内容
+    private fun buildCandidates(japanese: Boolean): List<String> {
+        val m = mode()
+        if (m == Converter.MODE_TEXT) return emptyList()
+
         val reading = buffer.toString()
-        val useConv = japanese && convertOn && reading.isNotEmpty()
-        val out = ArrayList<String>()
-        for (w in Predictor.suggest(this, reading, if (useConv) 2 else 5)) {
-            if (!out.contains(w)) out.add(w)
+        if (reading.isEmpty()) return emptyList()
+
+        if (m == Converter.MODE_PREDICT || !japanese) {
+            return Predictor.suggest(this, reading, 5)
         }
-        if (useConv) {
-            for (w in Converter.convert(this, reading, 8)) {
-                if (!out.contains(w)) out.add(w)
-                if (out.size >= 5) break
-            }
+
+        // 漢字 / 小学校モード: 5文字までは候補、6文字以降は改行まで出さない
+        if (reading.length > Converter.KANJI_MAX_LEN) return emptyList()
+        val out = ArrayList<String>()
+        for (w in Predictor.suggest(this, reading, 2)) if (!out.contains(w)) out.add(w)
+        for (w in Converter.candidates(this, reading, m, grade(), 8)) {
+            if (!out.contains(w)) out.add(w)
+            if (out.size >= 5) break
         }
         return if (out.size > 5) out.subList(0, 5) else out
     }
@@ -77,38 +122,161 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
         refreshCandidates()
     }
 
-    override fun onConvertToggled(on: Boolean) {
-        refreshCandidates()
+    // ---- メニュー ----
+
+    private fun dismissDialog() {
+        try { dialog?.dismiss() } catch (e: Throwable) { }
+        dialog = null
     }
 
-    // Gboard へ直接切り替える（見つからなければIME選択画面）
-    override fun onGboard() {
-        val imm = getSystemService(InputMethodManager::class.java) ?: return
-        val target = imm.enabledInputMethodList?.firstOrNull {
-            it.packageName == "com.google.android.inputmethod.latin"
+    private fun showIme(d: Dialog): Boolean {
+        val token = slideView?.windowToken ?: return false
+        val w = d.window ?: return false
+        val lp = w.attributes
+        lp.token = token
+        lp.type = WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG
+        w.attributes = lp
+        w.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        dismissDialog()
+        dialog = d
+        d.show()
+        return true
+    }
+
+    private fun panel(): LinearLayout {
+        val ll = LinearLayout(this)
+        ll.orientation = LinearLayout.VERTICAL
+        ll.setBackgroundColor(Color.parseColor("#1E2A38"))
+        val p = (12 * resources.displayMetrics.density).toInt()
+        ll.setPadding(p, p, p, p)
+        return ll
+    }
+
+    private fun heading(text: String): TextView {
+        val tv = TextView(this)
+        tv.text = text
+        tv.setTextColor(Color.parseColor("#ECEFF1"))
+        tv.textSize = 16f
+        tv.setPadding(0, 0, 0, (8 * resources.displayMetrics.density).toInt())
+        return tv
+    }
+
+    private fun menuButton(text: String, onClick: () -> Unit): Button {
+        val b = Button(this)
+        b.text = text
+        b.isAllCaps = false
+        b.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        b.setOnClickListener { onClick() }
+        return b
+    }
+
+    override fun onMenu() {
+        val ll = panel()
+        ll.addView(heading("マルチモニタ設定"))
+        ll.addView(menuButton("Gboardへ切り替える") { dismissDialog(); switchToGboard() })
+
+        val cur = mode()
+        val schoolLabel = "小学校モード（" + grade() + "年生）" + if (cur == Converter.MODE_SCHOOL) " ●" else ""
+        ll.addView(menuButton(schoolLabel) { dismissDialog(); showGradeMenu() })
+        ll.addView(menuButton("漢字モード" + if (cur == Converter.MODE_KANJI) " ●" else "") {
+            dismissDialog(); setMode(Converter.MODE_KANJI)
+        })
+        ll.addView(menuButton("予測モード（既定）" + if (cur == Converter.MODE_PREDICT) " ●" else "") {
+            dismissDialog(); setMode(Converter.MODE_PREDICT)
+        })
+        ll.addView(menuButton("テキストモード" + if (cur == Converter.MODE_TEXT) " ●" else "") {
+            dismissDialog(); setMode(Converter.MODE_TEXT)
+        })
+        ll.addView(menuButton("閉じる") { dismissDialog() })
+
+        val d = Dialog(this)
+        d.setContentView(wrapScroll(ll))
+        if (!showIme(d)) {
+            val imm = getSystemService(InputMethodManager::class.java)
+            imm?.showInputMethodPicker()
         }
-        val id = target?.id
-        if (id == null) {
-            imm.showInputMethodPicker()
-            return
+    }
+
+    private fun wrapScroll(v: View): View {
+        val sv = ScrollView(this)
+        sv.addView(v)
+        return sv
+    }
+
+    private fun showGradeMenu() {
+        val ll = panel()
+        ll.addView(heading("小学校モード: 学年を選ぶ"))
+        for (g in 1..6) {
+            ll.addView(menuButton(g.toString() + "年生" + if (grade() == g && mode() == Converter.MODE_SCHOOL) " ●" else "") {
+                prefs().edit().putInt("grade", g).apply()
+                dismissDialog()
+                setMode(Converter.MODE_SCHOOL)
+            })
         }
-        var ok = false
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= 28) {
-                switchInputMethod(id)
-                ok = true
-            } else {
-                val token = window?.window?.attributes?.token
-                if (token != null) {
-                    @Suppress("DEPRECATION")
-                    imm.setInputMethod(token, id)
-                    ok = true
+        ll.addView(menuButton("閉じる") { dismissDialog() })
+        val d = Dialog(this)
+        d.setContentView(wrapScroll(ll))
+        showIme(d)
+    }
+
+    // ---- テキストモードのポップアップ ----
+
+    override fun onTextSlot(button: Int) {
+        val ll = panel()
+        ll.addView(heading("テキスト " + button + "（各30文字まで）"))
+
+        for (slot in 1..TextSlots.SLOTS) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+
+            val text = TextSlots.get(this, button, slot)
+            val bText = Button(this)
+            bText.isAllCaps = false
+            bText.text = if (text.isEmpty()) slot.toString() + ". （未登録）" else slot.toString() + ". " + text
+            bText.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            bText.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            bText.setOnClickListener {
+                if (text.isNotEmpty()) {
+                    currentInputConnection?.commitText(text, 1)
+                    dismissDialog()
+                } else {
+                    dismissDialog(); openEditor(button, slot)
                 }
             }
-        } catch (e: Throwable) {
-            ok = false
+            row.addView(bText)
+
+            val bEdit = Button(this)
+            bEdit.isAllCaps = false
+            bEdit.text = if (text.isEmpty()) "登録" else "変更"
+            bEdit.setOnClickListener { dismissDialog(); openEditor(button, slot) }
+            row.addView(bEdit)
+
+            val bDel = Button(this)
+            bDel.isAllCaps = false
+            bDel.text = "削除"
+            bDel.setOnClickListener {
+                TextSlots.delete(this, button, slot)
+                dismissDialog()
+                onTextSlot(button)
+            }
+            row.addView(bDel)
+
+            ll.addView(row)
         }
-        if (!ok) imm.showInputMethodPicker()
+        ll.addView(menuButton("閉じる") { dismissDialog() })
+
+        val d = Dialog(this)
+        d.setContentView(wrapScroll(ll))
+        if (!showIme(d)) openEditor(button, 1)
+    }
+
+    // 登録・変更はアプリ側の編集画面で行う（IME内では文字入力ができないため）
+    private fun openEditor(button: Int, slot: Int) {
+        val i = Intent(this, TextSlotActivity::class.java)
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        i.putExtra("button", button)
+        i.putExtra("slot", slot)
+        startActivity(i)
     }
 
     override fun onSwitchLayout() {
@@ -171,15 +339,19 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
     }
 
     // 直前1文字を濁点/半濁点/小書きへ巡回変換
-    override fun onTransformLast() {
+    override fun onTransformLast() = transform(true)
+
+    // 長押しは逆順に巡回
+    override fun onTransformLastBack() = transform(false)
+
+    private fun transform(forward: Boolean) {
         val ic = currentInputConnection ?: return
         val before = ic.getTextBeforeCursor(1, 0)
         if (before.isNullOrEmpty()) return
         val ch = before.toString()
-        // カタカナはひらがなへ寄せてから変換し、元がカタカナなら戻す
         val wasKatakana = ch[0].code in 0x30A1..0x30F6
         val hira = if (wasKatakana) kataToHira(ch) else ch
-        val cycled = KanaTables.cycleChar(hira) ?: return
+        val cycled = (if (forward) KanaTables.cycleChar(hira) else KanaTables.cycleCharBack(hira)) ?: return
         val out = if (wasKatakana) KanaTables.toKatakana(cycled) else cycled
         ic.deleteSurroundingText(1, 0)
         ic.commitText(out, 1)
@@ -197,6 +369,35 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
             if (code in 0x30A1..0x30F6) sb.append((code - 0x60).toChar()) else sb.append(c)
         }
         return sb.toString()
+    }
+
+    private fun switchToGboard() {
+        val imm = getSystemService(InputMethodManager::class.java) ?: return
+        val target = imm.enabledInputMethodList?.firstOrNull {
+            it.packageName == "com.google.android.inputmethod.latin"
+        }
+        val id = target?.id
+        if (id == null) {
+            imm.showInputMethodPicker()
+            return
+        }
+        var ok = false
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                switchInputMethod(id)
+                ok = true
+            } else {
+                val token = window?.window?.attributes?.token
+                if (token != null) {
+                    @Suppress("DEPRECATION")
+                    imm.setInputMethod(token, id)
+                    ok = true
+                }
+            }
+        } catch (e: Throwable) {
+            ok = false
+        }
+        if (!ok) imm.showInputMethodPicker()
     }
 
     override fun onNextIme() {

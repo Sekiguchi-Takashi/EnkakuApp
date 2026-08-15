@@ -18,6 +18,12 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".TextSlotActivity"
+            android:exported="false"
+            android:label="テキスト登録"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".EnkakuIme"
             android:exported="true"

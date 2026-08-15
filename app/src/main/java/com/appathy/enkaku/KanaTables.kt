@@ -49,6 +49,15 @@ object KanaTables {
         return null
     }
 
+    // 直前1文字を1つ前の変形へ（長押し用の逆順巡回）
+    fun cycleCharBack(c: String): String? {
+        for (grp in cycles) {
+            val idx = grp.indexOf(c)
+            if (idx >= 0) return grp[(idx - 1 + grp.size) % grp.size]
+        }
+        return null
+    }
+
     // ひらがな→カタカナ
     fun toKatakana(s: String): String {
         val sb = StringBuilder()
@@ -128,6 +137,10 @@ object KanaTables {
         "IJKLMNOPQ".map { it.toString() },
         "RSTUVWXYZ".map { it.toString() }
     )
+
+    // 英字モードの記号ストリップ（読点・句点ではなくカンマ・ピリオド）
+    val asciiSymbolStrip: List<String> =
+        listOf(".", "@", "/", "_", ":", "-", ",", "?", "!", "~", "'")
 
     // ローマ数字ストリップ（Ⅰ〜Ⅹ。ローマ数字に0は存在しない）
     val romanStrip: List<String> =
