@@ -34,19 +34,40 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
 
     private fun refreshCandidates() {
         val v = slideView ?: return
-        v.setCandidates(Predictor.suggest(this, buffer.toString()))
+        v.setCandidates(buildCandidates(v.isJapanese(), v.isConvertOn()))
+    }
+
+    // 予測（学習済み）を先に、足りない分を内蔵辞書の変換候補で埋める
+    private fun buildCandidates(japanese: Boolean, convertOn: Boolean): List<String> {
+        val reading = buffer.toString()
+        val useConv = japanese && convertOn && reading.isNotEmpty()
+        val out = ArrayList<String>()
+        for (w in Predictor.suggest(this, reading, if (useConv) 2 else 5)) {
+            if (!out.contains(w)) out.add(w)
+        }
+        if (useConv) {
+            for (w in Converter.convert(this, reading, 8)) {
+                if (!out.contains(w)) out.add(w)
+                if (out.size >= 5) break
+            }
+        }
+        return if (out.size > 5) out.subList(0, 5) else out
     }
 
     private fun learnBuffer() {
-        if (buffer.length >= 2) Predictor.learn(this, buffer.toString())
+        if (buffer.length >= 2) {
+            val b = buffer.toString()
+            Predictor.learn(this, b, b)
+        }
         buffer.setLength(0)
     }
 
     override fun onCandidate(text: String) {
         val ic = currentInputConnection ?: return
-        if (buffer.isNotEmpty()) ic.deleteSurroundingText(buffer.length, 0)
+        val reading = buffer.toString()
+        if (reading.isNotEmpty()) ic.deleteSurroundingText(reading.length, 0)
         ic.commitText(text, 1)
-        Predictor.learn(this, text)
+        if (reading.isNotEmpty()) Predictor.learn(this, reading, text)
         buffer.setLength(0)
         refreshCandidates()
     }
@@ -54,6 +75,40 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
     override fun onModeChanged(japanese: Boolean) {
         buffer.setLength(0)
         refreshCandidates()
+    }
+
+    override fun onConvertToggled(on: Boolean) {
+        refreshCandidates()
+    }
+
+    // Gboard へ直接切り替える（見つからなければIME選択画面）
+    override fun onGboard() {
+        val imm = getSystemService(InputMethodManager::class.java) ?: return
+        val target = imm.enabledInputMethodList?.firstOrNull {
+            it.packageName == "com.google.android.inputmethod.latin"
+        }
+        val id = target?.id
+        if (id == null) {
+            imm.showInputMethodPicker()
+            return
+        }
+        var ok = false
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                switchInputMethod(id)
+                ok = true
+            } else {
+                val token = window?.window?.attributes?.token
+                if (token != null) {
+                    @Suppress("DEPRECATION")
+                    imm.setInputMethod(token, id)
+                    ok = true
+                }
+            }
+        } catch (e: Throwable) {
+            ok = false
+        }
+        if (!ok) imm.showInputMethodPicker()
     }
 
     override fun onSwitchLayout() {

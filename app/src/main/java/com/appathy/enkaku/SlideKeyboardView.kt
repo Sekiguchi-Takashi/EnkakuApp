@@ -24,6 +24,8 @@ class SlideKeyboardView(context: Context) : View(context) {
         fun onHide()
         fun onSwitchLayout()
         fun onModeChanged(japanese: Boolean)
+        fun onGboard()
+        fun onConvertToggled(on: Boolean)
     }
 
     var listener: Listener? = null
@@ -61,6 +63,8 @@ class SlideKeyboardView(context: Context) : View(context) {
     private val K_ENTER = 17
     private val K_DEL = 18
     private val K_HIDE = 19
+    private val K_GBOARD = 30
+    private val K_CONV = 31
 
     private val ROW_CAND = 0
     private val ROW_MAIN = 1
@@ -72,7 +76,9 @@ class SlideKeyboardView(context: Context) : View(context) {
     private val maxCand = 5
 
     private var japanese = true
+    private var convertOn = true
     private var candidates: List<String> = emptyList()
+    private val sideW = dp(52f)
 
     private fun mainIds(): List<Int> =
         if (japanese) (0..9).toList()
@@ -104,8 +110,9 @@ class SlideKeyboardView(context: Context) : View(context) {
     private var longFired = false
 
     init {
-        japanese = context.getSharedPreferences("enkaku", Context.MODE_PRIVATE)
-            .getBoolean("jp_mode", true)
+        val sp = context.getSharedPreferences("enkaku", Context.MODE_PRIVATE)
+        japanese = sp.getBoolean("jp_mode", true)
+        convertOn = sp.getBoolean("conv_on", true)
     }
 
     fun setCandidates(list: List<String>) {
@@ -114,6 +121,7 @@ class SlideKeyboardView(context: Context) : View(context) {
     }
 
     fun isJapanese(): Boolean = japanese
+    fun isConvertOn(): Boolean = convertOn
 
     private fun totalHeight() = gap * 4 + rowH * 3
     private fun rowTop(r: Int) = gap + r * (rowH + gap)
@@ -138,9 +146,23 @@ class SlideKeyboardView(context: Context) : View(context) {
         return RectF(l, t, l + kw, t + rowH)
     }
 
+    private fun gboardRect(): RectF {
+        val t = rowTop(ROW_CAND)
+        return RectF(gap, t, gap + sideW, t + rowH)
+    }
+
+    private fun convRect(): RectF {
+        val t = rowTop(ROW_CAND)
+        return RectF(width - gap - sideW, t, width - gap, t + rowH)
+    }
+
+    private fun candLeft(): Float = gap + sideW + gap
+    private fun candRight(): Float = if (japanese) width - gap - sideW - gap else width - gap
+
     private fun candRect(i: Int, n: Int): RectF {
-        val cellW = (width - gap * (n + 1)) / n
-        val l = gap + i * (cellW + gap)
+        val area = candRight() - candLeft()
+        val cellW = (area - gap * (n - 1)) / n
+        val l = candLeft() + i * (cellW + gap)
         val t = rowTop(ROW_CAND)
         return RectF(l, t, l + cellW, t + rowH)
     }
@@ -167,6 +189,8 @@ class SlideKeyboardView(context: Context) : View(context) {
         K_ENTER -> "改行"
         K_DEL -> "削除"
         K_HIDE -> "▽"
+        K_GBOARD -> "G"
+        K_CONV -> "変換"
         else -> ""
     }
 
@@ -183,13 +207,29 @@ class SlideKeyboardView(context: Context) : View(context) {
     }
 
     private fun drawCandidates(c: Canvas) {
+        val keep = pText.textSize
+
+        // 左端: Gboard 切替
+        val g = gboardRect()
+        roundKey(c, g, if (downKey == K_GBOARD && !longFired) colDown else colFunc)
+        centerText(c, label(K_GBOARD), g, colText)
+
+        // 右端: 変換 ON/OFF（日本語モードのみ）
+        if (japanese) {
+            val v = convRect()
+            roundKey(c, v, if (convertOn) colDown else colFunc)
+            pText.textSize = rowH * 0.34f
+            centerText(c, label(K_CONV), v, colText)
+            pText.textSize = keep
+        }
+
         val n = candidates.size
         if (n == 0) {
-            val r = RectF(gap, rowTop(ROW_CAND), width - gap, rowTop(ROW_CAND) + rowH)
+            val r = RectF(candLeft(), rowTop(ROW_CAND), candRight(), rowTop(ROW_CAND) + rowH)
             roundKey(c, r, colCand)
-            val keep = pText.textSize
-            pText.textSize = rowH * 0.34f
-            centerText(c, "予測候補（入力するとここに出ます）", r, colHint)
+            pText.textSize = rowH * 0.32f
+            val msg = if (japanese && convertOn) "変換ON：入力すると候補が出ます" else "予測候補"
+            centerText(c, msg, r, colHint)
             pText.textSize = keep
             return
         }
@@ -283,8 +323,10 @@ class SlideKeyboardView(context: Context) : View(context) {
     private fun candAt(x: Float): Int {
         val n = candidates.size
         if (n == 0) return -1
-        val cellW = (width - gap * (n + 1)) / n
-        val i = ((x - gap) / (cellW + gap)).toInt()
+        if (x < candLeft() || x > candRight()) return -1
+        val area = candRight() - candLeft()
+        val cellW = (area - gap * (n - 1)) / n
+        val i = ((x - candLeft()) / (cellW + gap)).toInt()
         return i.coerceIn(0, n - 1)
     }
 
@@ -322,10 +364,18 @@ class SlideKeyboardView(context: Context) : View(context) {
             }
         }
 
-        // 予測候補行
+        // 候補行（G / 候補 / 変換）
         if (rowAt(y) == ROW_CAND) {
-            downCand = candAt(x)
+            downCand = -1
             downKey = -1
+            if (x <= gboardRect().right + gap) {
+                downKey = K_GBOARD
+                scheduleLong(K_GBOARD)
+            } else if (japanese && x >= convRect().left - gap) {
+                downKey = K_CONV
+            } else {
+                downCand = candAt(x)
+            }
             invalidate()
             return
         }
@@ -384,6 +434,8 @@ class SlideKeyboardView(context: Context) : View(context) {
         if (strip != Strip.NONE && persist) { downKey = -1; invalidate(); return }
 
         if (committed) when (downKey) {
+            K_GBOARD -> listener?.onGboard()
+            K_CONV -> toggleConvert()
             K_FIX -> lock = !lock
             K_MODE -> toggleMode()
             K_DAKU -> listener?.onTransformLast()
@@ -393,6 +445,13 @@ class SlideKeyboardView(context: Context) : View(context) {
         }
         downKey = -1
         invalidate()
+    }
+
+    private fun toggleConvert() {
+        convertOn = !convertOn
+        context.getSharedPreferences("enkaku", Context.MODE_PRIVATE)
+            .edit().putBoolean("conv_on", convertOn).apply()
+        listener?.onConvertToggled(convertOn)
     }
 
     private fun toggleMode() {
@@ -437,6 +496,7 @@ class SlideKeyboardView(context: Context) : View(context) {
             when (key) {
                 K_FIX -> listener?.onSwitchLayout()
                 K_HIDE -> listener?.onNextIme()
+                K_GBOARD -> listener?.onNextIme()
             }
         }
         longRunnable = r

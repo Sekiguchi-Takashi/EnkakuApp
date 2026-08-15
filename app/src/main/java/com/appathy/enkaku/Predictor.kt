@@ -3,66 +3,76 @@ package com.appathy.enkaku
 import android.content.Context
 
 // 自前の入力履歴による予測（他IMEの履歴はAndroidの仕様上読めないため本アプリ内で学習する）
+// 保存形式: よみ<TAB>単語<TAB>回数
 object Predictor {
 
     private const val PREF = "enkaku_pred"
     private const val KEY = "words"
-    private const val MAX_ENTRIES = 400
+    private const val MAX_ENTRIES = 500
 
-    private var cache: LinkedHashMap<String, Int>? = null
+    private class Entry(val reading: String, val word: String, var count: Int)
 
-    private fun load(ctx: Context): LinkedHashMap<String, Int> {
+    private var cache: ArrayList<Entry>? = null
+
+    private fun load(ctx: Context): ArrayList<Entry> {
         cache?.let { return it }
-        val map = LinkedHashMap<String, Int>()
+        val list = ArrayList<Entry>()
         val raw = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY, "") ?: ""
         for (line in raw.split("\n")) {
             if (line.isEmpty()) continue
-            val idx = line.lastIndexOf('\t')
-            if (idx <= 0) continue
-            val w = line.substring(0, idx)
-            val n = line.substring(idx + 1).toIntOrNull() ?: continue
-            map[w] = n
+            val parts = line.split("\t")
+            when (parts.size) {
+                2 -> parts[1].toIntOrNull()?.let { list.add(Entry(parts[0], parts[0], it)) }
+                3 -> parts[2].toIntOrNull()?.let { list.add(Entry(parts[0], parts[1], it)) }
+            }
         }
-        cache = map
-        return map
+        cache = list
+        return list
     }
 
-    private fun save(ctx: Context, map: LinkedHashMap<String, Int>) {
+    private fun save(ctx: Context, list: ArrayList<Entry>) {
         val sb = StringBuilder()
-        for ((w, n) in map) {
-            sb.append(w).append('\t').append(n).append('\n')
+        for (e in list) {
+            sb.append(e.reading).append('\t').append(e.word).append('\t').append(e.count).append('\n')
         }
         ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
             .edit().putString(KEY, sb.toString()).apply()
     }
 
-    fun learn(ctx: Context, word: String) {
-        if (word.length < 2) return
-        val map = load(ctx)
-        val n = (map[word] ?: 0) + 1
-        map.remove(word)
-        map[word] = n
-        if (map.size > MAX_ENTRIES) {
-            val victims = map.entries.sortedBy { it.value }.take(map.size - MAX_ENTRIES)
-            for (v in victims) map.remove(v.key)
+    fun learn(ctx: Context, reading: String, word: String) {
+        if (reading.isEmpty() || word.isEmpty()) return
+        if (reading == word && reading.length < 2) return
+        val list = load(ctx)
+        val hit = list.firstOrNull { it.reading == reading && it.word == word }
+        if (hit != null) {
+            hit.count++
+            list.remove(hit)
+            list.add(hit)
+        } else {
+            list.add(Entry(reading, word, 1))
         }
-        save(ctx, map)
+        if (list.size > MAX_ENTRIES) {
+            val victims = list.sortedBy { it.count }.take(list.size - MAX_ENTRIES)
+            for (v in victims) list.remove(v)
+        }
+        save(ctx, list)
     }
 
-    // prefix が空なら使用回数の多い語、そうでなければ前方一致の語を返す
+    // prefix が空なら使用回数の多い語、そうでなければ読みが前方一致する語を返す
     fun suggest(ctx: Context, prefix: String, limit: Int = 5): List<String> {
-        val map = load(ctx)
-        if (map.isEmpty()) return emptyList()
-        val entries = map.entries.toList().asReversed()
-        val hit = ArrayList<Pair<String, Int>>()
-        for (e in entries) {
-            if (prefix.isEmpty()) {
-                hit.add(Pair(e.key, e.value))
-            } else if (e.key.startsWith(prefix) && e.key != prefix) {
-                hit.add(Pair(e.key, e.value))
-            }
+        val list = load(ctx)
+        if (list.isEmpty()) return emptyList()
+        val hit = ArrayList<Entry>()
+        for (e in list.asReversed()) {
+            if (prefix.isEmpty()) hit.add(e)
+            else if (e.reading.startsWith(prefix) && !(e.reading == prefix && e.word == prefix)) hit.add(e)
         }
-        return hit.sortedByDescending { it.second }.take(limit).map { it.first }
+        val out = ArrayList<String>()
+        for (e in hit.sortedByDescending { it.count }) {
+            if (!out.contains(e.word)) out.add(e.word)
+            if (out.size >= limit) break
+        }
+        return out
     }
 
     fun clear(ctx: Context) {
