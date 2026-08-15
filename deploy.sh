@@ -17,7 +17,8 @@ git commit -m "${1:-update}"
 git fetch origin main 2>/dev/null
 git pull --rebase origin main 2>/dev/null
 git push -u origin main
-LATEST=$(curl -s -H "Authorization: token $TOKEN" $API/repos/$GHUSER/$REPO/releases/latest | grep '"tag_name"' | head -n1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+git fetch --tags origin 2>/dev/null
+LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
 if [ -z "$LATEST" ]; then
   NEXT=v1.0.0
 else
@@ -28,6 +29,6 @@ else
   PATCH=$((PATCH + 1))
   NEXT=v$MAJOR.$MINOR.$PATCH
 fi
-SHA=$(curl -s -H "Authorization: token $TOKEN" $API/repos/$GHUSER/$REPO/git/refs/heads/main | grep '"sha"' | head -n1 | sed -E 's/.*"sha": *"([^"]+)".*/\1/')
+SHA=$(git rev-parse HEAD)
 curl -s -o /dev/null -X POST -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github+json" $API/repos/$GHUSER/$REPO/git/refs -d "{\"ref\":\"refs/tags/$NEXT\",\"sha\":\"$SHA\"}"
 printf 'pushed and tagged %s\n' "$NEXT"
