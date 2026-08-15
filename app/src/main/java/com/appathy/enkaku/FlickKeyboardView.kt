@@ -22,6 +22,7 @@ class FlickKeyboardView(context: Context) : View(context) {
         fun onTransformLast()
         fun onNextIme()
         fun onHide()
+        fun onSwitchLayout()
     }
 
     var listener: Listener? = null
@@ -121,6 +122,8 @@ class FlickKeyboardView(context: Context) : View(context) {
     private val repeatHandler = Handler(Looper.getMainLooper())
     private var repeatRunnable: Runnable? = null
     private var repeatFired = false
+    private var longRunnable: Runnable? = null
+    private var longFired = false
 
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w)
@@ -232,10 +235,12 @@ class FlickKeyboardView(context: Context) : View(context) {
                 downCol = ((e.x - gap) / (kw + gap)).toInt().coerceIn(0, cols - 1)
                 downRow = ((e.y - gap) / (kh + gap)).toInt().coerceIn(0, rows - 1)
                 repeatFired = false
+                longFired = false
                 curDir = 0
                 flicking = downCol in 1..3 && keyAt(downCol, downRow) is Char12 &&
                         !isDakutenSlot((keyAt(downCol, downRow) as Char12).slot)
                 startRepeatIfNeeded()
+                startLongIfNeeded()
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
@@ -250,7 +255,8 @@ class FlickKeyboardView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 stopRepeat()
-                if (e.actionMasked == MotionEvent.ACTION_UP) commitTouch()
+                stopLong()
+                if (e.actionMasked == MotionEvent.ACTION_UP && !longFired) commitTouch()
                 downCol = -1; downRow = -1; flicking = false
                 invalidate()
             }
@@ -275,6 +281,21 @@ class FlickKeyboardView(context: Context) : View(context) {
     private fun stopRepeat() {
         repeatRunnable?.let { repeatHandler.removeCallbacks(it) }
         repeatRunnable = null
+    }
+
+    private fun startLongIfNeeded() {
+        if (keyAt(downCol, downRow) is Hide) {
+            longRunnable = Runnable {
+                longFired = true
+                listener?.onSwitchLayout()
+            }
+            repeatHandler.postDelayed(longRunnable!!, 500)
+        }
+    }
+
+    private fun stopLong() {
+        longRunnable?.let { repeatHandler.removeCallbacks(it) }
+        longRunnable = null
     }
 
     private fun commitTouch() {

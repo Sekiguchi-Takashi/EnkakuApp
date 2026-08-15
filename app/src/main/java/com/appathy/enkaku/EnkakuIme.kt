@@ -6,15 +6,25 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 
-class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener {
+class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboardView.Listener {
 
-    private var kb: FlickKeyboardView? = null
+    private enum class Layout { SLIDE, FLICK }
 
-    override fun onCreateInputView(): View {
-        val v = FlickKeyboardView(this)
-        v.listener = this
-        kb = v
-        return v
+    private fun prefs() = getSharedPreferences("enkaku", MODE_PRIVATE)
+    private fun savedLayout(): Layout =
+        if (prefs().getString("layout", "SLIDE") == "FLICK") Layout.FLICK else Layout.SLIDE
+
+    private fun buildView(layout: Layout): View = when (layout) {
+        Layout.SLIDE -> SlideKeyboardView(this).also { it.listener = this }
+        Layout.FLICK -> FlickKeyboardView(this).also { it.listener = this }
+    }
+
+    override fun onCreateInputView(): View = buildView(savedLayout())
+
+    override fun onSwitchLayout() {
+        val next = if (savedLayout() == Layout.SLIDE) Layout.FLICK else Layout.SLIDE
+        prefs().edit().putString("layout", next.name).apply()
+        setInputView(buildView(next))
     }
 
     // 横持ちでも全画面入力にしない（画面を専有しないため）

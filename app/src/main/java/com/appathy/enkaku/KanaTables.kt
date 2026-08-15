@@ -74,4 +74,44 @@ object KanaTables {
         "7", "8", "9",
         "*", "0", "#"
     )
-}
+
+    // ---- スライド展開キーボード用 ----
+
+    // 行頭（画面に横並びで出る）
+    val gyoHeads: List<String> = listOf("あ", "か", "さ", "た", "な", "は", "ま", "や", "ら", "わ")
+
+    // 各行の あ-い-う-え-お 順（可変長。や行は3、わ行は を/ん/ー/〜 を含む）
+    val gyo: List<List<String>> = listOf(
+        listOf("あ", "い", "う", "え", "お"),
+        listOf("か", "き", "く", "け", "こ"),
+        listOf("さ", "し", "す", "せ", "そ"),
+        listOf("た", "ち", "つ", "て", "と"),
+        listOf("な", "に", "ぬ", "ね", "の"),
+        listOf("は", "ひ", "ふ", "へ", "ほ"),
+        listOf("ま", "み", "む", "め", "も"),
+        listOf("や", "ゆ", "よ"),
+        listOf("ら", "り", "る", "れ", "ろ"),
+        listOf("わ", "を", "ん", "ー", "〜")
+    )
+
+    // 行iの展開ストリップ（左→右）= [カタカナを外側から] + [行頭ひらがな] + [残りのひらがな]
+    // 例 あ: オ エ ウ イ ア あ い う え お
+    fun expandStrip(i: Int): List<String> {
+        val row = gyo[i]
+        val left = ArrayList<String>()
+        for (j in row.indices.reversed()) left.add(toKatakana(row[j]))
+        val right = ArrayList<String>()
+        for (j in 1 until row.size) right.add(row[j])
+        val out = ArrayList<String>()
+        out.addAll(left)
+        out.add(row[0])
+        out.addAll(right)
+        return out
+    }
+
+    // 記号ストリップ（. と @ を先頭付近に）
+    val symbolStrip: List<String> =
+        listOf(".", "@", "/", "_", ":", "-", "、", "。", "？", "！", "〜")
+
+    // 数字ストリップ
+    val digitStrip: List<String> = listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
