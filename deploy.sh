@@ -18,7 +18,6 @@ git fetch origin main 2>/dev/null
 git pull --rebase origin main 2>/dev/null
 git push -u origin main
 git fetch --tags origin 2>/dev/null
-git fetch --tags origin
 LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
 if [ -z "$LATEST" ]; then
   NEXT=v1.0.0
