@@ -115,4 +115,21 @@ object KanaTables {
 
     // 数字ストリップ
     val digitStrip: List<String> = listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+
+    // ---- 英字モード ----
+    // 展開グループ: a=a〜h / i=i〜q / r=r〜z（大文字も同じ区切り）
+    val alphaHeads: List<String> = listOf("a", "i", "r", "A", "I", "R")
+
+    val alphaGroups: List<List<String>> = listOf(
+        "abcdefgh".map { it.toString() },
+        "ijklmnopq".map { it.toString() },
+        "rstuvwxyz".map { it.toString() },
+        "ABCDEFGH".map { it.toString() },
+        "IJKLMNOPQ".map { it.toString() },
+        "RSTUVWXYZ".map { it.toString() }
+    )
+
+    // ローマ数字ストリップ（Ⅰ〜Ⅹ。ローマ数字に0は存在しない）
+    val romanStrip: List<String> =
+        listOf("\u2160", "\u2161", "\u2162", "\u2163", "\u2164", "\u2165", "\u2166", "\u2167", "\u2168", "\u2169")
 }

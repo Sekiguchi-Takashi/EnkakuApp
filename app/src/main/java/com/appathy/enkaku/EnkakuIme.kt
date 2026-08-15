@@ -14,12 +14,47 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
     private fun savedLayout(): Layout =
         if (prefs().getString("layout", "SLIDE") == "FLICK") Layout.FLICK else Layout.SLIDE
 
+    private var slideView: SlideKeyboardView? = null
+
+    // 直前に打ち込んだ連続文字列（予測の手がかり。空白/改行/候補確定でリセット）
+    private val buffer = StringBuilder()
+
     private fun buildView(layout: Layout): View = when (layout) {
-        Layout.SLIDE -> SlideKeyboardView(this).also { it.listener = this }
-        Layout.FLICK -> FlickKeyboardView(this).also { it.listener = this }
+        Layout.SLIDE -> SlideKeyboardView(this).also { it.listener = this; slideView = it }
+        Layout.FLICK -> FlickKeyboardView(this).also { it.listener = this; slideView = null }
     }
 
     override fun onCreateInputView(): View = buildView(savedLayout())
+
+    override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
+        super.onStartInputView(info, restarting)
+        buffer.setLength(0)
+        refreshCandidates()
+    }
+
+    private fun refreshCandidates() {
+        val v = slideView ?: return
+        v.setCandidates(Predictor.suggest(this, buffer.toString()))
+    }
+
+    private fun learnBuffer() {
+        if (buffer.length >= 2) Predictor.learn(this, buffer.toString())
+        buffer.setLength(0)
+    }
+
+    override fun onCandidate(text: String) {
+        val ic = currentInputConnection ?: return
+        if (buffer.isNotEmpty()) ic.deleteSurroundingText(buffer.length, 0)
+        ic.commitText(text, 1)
+        Predictor.learn(this, text)
+        buffer.setLength(0)
+        refreshCandidates()
+    }
+
+    override fun onModeChanged(japanese: Boolean) {
+        buffer.setLength(0)
+        refreshCandidates()
+    }
 
     override fun onSwitchLayout() {
         val next = if (savedLayout() == Layout.SLIDE) Layout.FLICK else Layout.SLIDE
@@ -34,6 +69,8 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
 
     override fun onCommit(text: String) {
         currentInputConnection?.commitText(text, 1)
+        buffer.append(text)
+        refreshCandidates()
     }
 
     override fun onBackspace() {
@@ -41,9 +78,12 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
         val sel = ic.getSelectedText(0)
         if (sel != null && sel.isNotEmpty()) {
             ic.commitText("", 1)
+            buffer.setLength(0)
         } else {
             ic.deleteSurroundingText(1, 0)
+            if (buffer.isNotEmpty()) buffer.setLength(buffer.length - 1)
         }
+        refreshCandidates()
     }
 
     override fun onEnter() {
@@ -58,10 +98,14 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
         }
+        learnBuffer()
+        refreshCandidates()
     }
 
     override fun onSpace() {
         currentInputConnection?.commitText(" ", 1)
+        learnBuffer()
+        refreshCandidates()
     }
 
     override fun onCursor(left: Boolean) {
@@ -84,6 +128,11 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
         val out = if (wasKatakana) KanaTables.toKatakana(cycled) else cycled
         ic.deleteSurroundingText(1, 0)
         ic.commitText(out, 1)
+        if (buffer.isNotEmpty()) {
+            buffer.setLength(buffer.length - 1)
+            buffer.append(out)
+        }
+        refreshCandidates()
     }
 
     private fun kataToHira(s: String): String {

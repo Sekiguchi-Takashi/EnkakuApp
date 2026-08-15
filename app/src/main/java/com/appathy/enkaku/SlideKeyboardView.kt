@@ -14,6 +14,7 @@ class SlideKeyboardView(context: Context) : View(context) {
 
     interface Listener {
         fun onCommit(text: String)
+        fun onCandidate(text: String)
         fun onBackspace()
         fun onEnter()
         fun onSpace()
@@ -22,6 +23,7 @@ class SlideKeyboardView(context: Context) : View(context) {
         fun onNextIme()
         fun onHide()
         fun onSwitchLayout()
+        fun onModeChanged(japanese: Boolean)
     }
 
     var listener: Listener? = null
@@ -38,47 +40,61 @@ class SlideKeyboardView(context: Context) : View(context) {
     private val colSel = Color.parseColor("#5B9BD5")
     private val colKata = Color.parseColor("#9AB8D6")
     private val colMark = Color.parseColor("#C9A15B")
+    private val colCand = Color.parseColor("#243444")
+    private val colCandText = Color.parseColor("#FFD9A0")
+    private val colHint = Color.parseColor("#5A6B7C")
 
     private val pKey = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val pText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = colText; textAlign = Paint.Align.CENTER
     }
 
-    // キーID
-    private val K_HEAD0 = 0            // 0..9 が あかさたなはまやらわ
+    // キーID（0..9=かな行頭 / 20..25=英字グループ）
+    private val K_ALPHA0 = 20
     private val K_FIX = 10
-    private val K_NUM = 11
-    private val K_SYM = 12
-    private val K_DAKU = 13
-    private val K_SPACE = 14
-    private val K_ENTER = 15
-    private val K_DEL = 16
-    private val K_HIDE = 17
+    private val K_MODE = 11
+    private val K_NUM = 12
+    private val K_SYM = 13
+    private val K_DAKU = 14
+    private val K_ROMAN = 15
+    private val K_SPACE = 16
+    private val K_ENTER = 17
+    private val K_DEL = 18
+    private val K_HIDE = 19
 
-    // 3行レイアウト（1行目=あかさたな / 2行目=はまやらわ / 3行目=機能）
-    private val rows: List<List<Int>> = listOf(
-        listOf(0, 1, 2, 3, 4),
-        listOf(5, 6, 7, 8, 9),
-        listOf(K_FIX, K_NUM, K_SYM, K_DAKU, K_SPACE, K_ENTER, K_DEL, K_HIDE)
-    )
+    private val ROW_CAND = 0
+    private val ROW_MAIN = 1
+    private val ROW_FUNC = 2
 
     private val gap = dp(3f)
     private val rowH = dp(40f)
     private val maxKeyW = dp(46f)
-    private val rowW = FloatArray(3)
-    private val rowLeft = FloatArray(3)
-    private val rowKeyW = FloatArray(3)
+    private val maxCand = 5
+
+    private var japanese = true
+    private var candidates: List<String> = emptyList()
+
+    private fun mainIds(): List<Int> =
+        if (japanese) (0..9).toList()
+        else (0 until KanaTables.alphaHeads.size).map { K_ALPHA0 + it }
+
+    private fun funcIds(): List<Int> = listOf(
+        K_FIX, K_MODE, K_NUM, K_SYM,
+        if (japanese) K_DAKU else K_ROMAN,
+        K_SPACE, K_ENTER, K_DEL, K_HIDE
+    )
 
     // 状態
     private var lock = false
-    private enum class Strip { NONE, GYO, NUM, SYM }
+    private enum class Strip { NONE, GYO, ALPHA, NUM, SYM, ROMAN }
     private var strip = Strip.NONE
-    private var stripGyo = 0
-    private var persist = false        // 固定ON時に展開を保持
+    private var stripIdx = 0            // GYO なら行番号、ALPHA ならグループ番号
+    private var persist = false
     private var selIdx = 0
-    private var selecting = false      // 保持ストリップをタップ選択中
+    private var selecting = false
 
     private var downKey = -1
+    private var downCand = -1
     private var downX = 0f
     private var moved = false
 
@@ -87,46 +103,66 @@ class SlideKeyboardView(context: Context) : View(context) {
     private var repeatRunnable: Runnable? = null
     private var longFired = false
 
+    init {
+        japanese = context.getSharedPreferences("enkaku", Context.MODE_PRIVATE)
+            .getBoolean("jp_mode", true)
+    }
+
+    fun setCandidates(list: List<String>) {
+        candidates = if (list.size > maxCand) list.subList(0, maxCand) else list
+        invalidate()
+    }
+
+    fun isJapanese(): Boolean = japanese
+
     private fun totalHeight() = gap * 4 + rowH * 3
     private fun rowTop(r: Int) = gap + r * (rowH + gap)
-    private fun funcRowTop() = rowTop(2)
-    private fun stripRegionTop() = rowTop(0)
-    private fun stripRegionBottom() = rowTop(1) + rowH
+    private fun stripRegionTop() = rowTop(ROW_CAND)
+    private fun stripRegionBottom() = rowTop(ROW_MAIN) + rowH
 
     override fun onMeasure(w: Int, h: Int) {
         setMeasuredDimension(MeasureSpec.getSize(w), totalHeight().toInt())
     }
 
-    override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
-        for (r in rows.indices) {
-            val n = rows[r].size
-            val fit = (w - gap * (n + 1)) / n
-            val kw = if (fit < maxKeyW) fit else maxKeyW
-            rowKeyW[r] = kw
-            rowW[r] = kw * n + gap * (n - 1)
-            rowLeft[r] = (w - rowW[r]) / 2f
-        }
+    private fun keyW(n: Int): Float {
+        val fit = (width - gap * (n + 1)) / n
+        return if (fit < maxKeyW) fit else maxKeyW
     }
 
-    private fun keyRect(r: Int, c: Int): RectF {
-        val l = rowLeft[r] + c * (rowKeyW[r] + gap)
+    private fun keyRect(ids: List<Int>, r: Int, c: Int): RectF {
+        val n = ids.size
+        val kw = keyW(n)
+        val total = kw * n + gap * (n - 1)
+        val l = (width - total) / 2f + c * (kw + gap)
         val t = rowTop(r)
-        return RectF(l, t, l + rowKeyW[r], t + rowH)
+        return RectF(l, t, l + kw, t + rowH)
+    }
+
+    private fun candRect(i: Int, n: Int): RectF {
+        val cellW = (width - gap * (n + 1)) / n
+        val l = gap + i * (cellW + gap)
+        val t = rowTop(ROW_CAND)
+        return RectF(l, t, l + cellW, t + rowH)
     }
 
     private fun currentStripList(): List<String> = when (strip) {
-        Strip.GYO -> KanaTables.expandStrip(stripGyo)
+        Strip.GYO -> KanaTables.expandStrip(stripIdx)
+        Strip.ALPHA -> KanaTables.alphaGroups[stripIdx]
         Strip.NUM -> KanaTables.digitStrip
         Strip.SYM -> KanaTables.symbolStrip
+        Strip.ROMAN -> KanaTables.romanStrip
         Strip.NONE -> emptyList()
     }
 
     private fun label(id: Int): String = when (id) {
         in 0..9 -> KanaTables.gyoHeads[id]
+        in K_ALPHA0..(K_ALPHA0 + 5) -> KanaTables.alphaHeads[id - K_ALPHA0]
         K_FIX -> if (lock) "固定●" else "固定"
+        K_MODE -> if (japanese) "A" else "あ"
         K_NUM -> "数"
         K_SYM -> "記号"
         K_DAKU -> "゛小"
+        K_ROMAN -> KanaTables.romanStrip[3]
         K_SPACE -> "空白"
         K_ENTER -> "改行"
         K_DEL -> "削除"
@@ -138,21 +174,50 @@ class SlideKeyboardView(context: Context) : View(context) {
         c.drawColor(colBg)
         pText.textSize = rowH * 0.42f
         if (strip == Strip.NONE) {
-            for (r in rows.indices) drawRow(c, r)
+            drawCandidates(c)
+            drawKeyRow(c, mainIds(), ROW_MAIN)
         } else {
             drawStrip(c)
-            drawRow(c, 2)
+        }
+        drawKeyRow(c, funcIds(), ROW_FUNC)
+    }
+
+    private fun drawCandidates(c: Canvas) {
+        val n = candidates.size
+        if (n == 0) {
+            val r = RectF(gap, rowTop(ROW_CAND), width - gap, rowTop(ROW_CAND) + rowH)
+            roundKey(c, r, colCand)
+            val keep = pText.textSize
+            pText.textSize = rowH * 0.34f
+            centerText(c, "予測候補（入力するとここに出ます）", r, colHint)
+            pText.textSize = keep
+            return
+        }
+        for (i in 0 until n) {
+            val r = candRect(i, n)
+            roundKey(c, r, if (i == downCand) colDown else colCand)
+            centerText(c, fitText(candidates[i], r.width()), r, colCandText)
         }
     }
 
-    private fun drawRow(c: Canvas, r: Int) {
-        for (col in rows[r].indices) {
-            val id = rows[r][col]
-            val rect = keyRect(r, col)
+    private fun fitText(s: String, w: Float): String {
+        if (pText.measureText(s) <= w - dp(6f)) return s
+        var cut = s
+        while (cut.length > 1 && pText.measureText(cut + "…") > w - dp(6f)) {
+            cut = cut.substring(0, cut.length - 1)
+        }
+        return cut + "…"
+    }
+
+    private fun drawKeyRow(c: Canvas, ids: List<Int>, r: Int) {
+        for (col in ids.indices) {
+            val id = ids[col]
+            val rect = keyRect(ids, r, col)
             val down = (id == downKey && !longFired)
             val base = when {
                 id == K_FIX && lock -> colDown
                 id in 0..9 -> colHead
+                id in K_ALPHA0..(K_ALPHA0 + 5) -> colHead
                 else -> colFunc
             }
             roundKey(c, rect, if (down) colDown else base)
@@ -182,32 +247,45 @@ class SlideKeyboardView(context: Context) : View(context) {
             val r = RectF(l, top, l + cellW, top + h)
             val sel = (i == selIdx)
             roundKey(c, r, if (sel) colSel else colStrip)
-            val labelText = list[i]
+            val t = list[i]
             val color = when {
-                strip == Strip.NUM && (labelText == "0" || labelText == "5") -> colMark
-                strip == Strip.GYO && isKatakana(labelText) -> colKata
+                strip == Strip.NUM && (t == "0" || t == "5") -> colMark
+                strip == Strip.GYO && isKatakana(t) -> colKata
                 else -> colText
             }
-            centerText(c, labelText, r, color)
+            centerText(c, t, r, color)
         }
     }
 
     private fun isKatakana(s: String) = s.isNotEmpty() && s[0].code in 0x30A1..0x30FA
 
     private fun rowAt(y: Float): Int {
-        for (r in rows.indices) {
+        for (r in 0..2) {
             if (y < rowTop(r) + rowH + gap / 2f) return r
         }
-        return rows.size - 1
+        return 2
     }
 
     private fun keyAt(x: Float, y: Float): Int {
         val r = rowAt(y)
-        val n = rows[r].size
-        val rel = x - rowLeft[r]
-        if (rel < -gap || rel > rowW[r] + gap) return -1
-        val i = (rel / (rowKeyW[r] + gap)).toInt().coerceIn(0, n - 1)
-        return rows[r][i]
+        if (r == ROW_CAND) return -1
+        val ids = if (r == ROW_MAIN) mainIds() else funcIds()
+        val n = ids.size
+        val kw = keyW(n)
+        val total = kw * n + gap * (n - 1)
+        val left = (width - total) / 2f
+        val rel = x - left
+        if (rel < -gap || rel > total + gap) return -1
+        val i = (rel / (kw + gap)).toInt().coerceIn(0, n - 1)
+        return ids[i]
+    }
+
+    private fun candAt(x: Float): Int {
+        val n = candidates.size
+        if (n == 0) return -1
+        val cellW = (width - gap * (n + 1)) / n
+        val i = ((x - gap) / (cellW + gap)).toInt()
+        return i.coerceIn(0, n - 1)
     }
 
     private fun stripIndexAt(x: Float): Int {
@@ -234,8 +312,7 @@ class SlideKeyboardView(context: Context) : View(context) {
 
         // 保持ストリップが開いている
         if (strip != Strip.NONE && persist) {
-            if (y >= funcRowTop()) {
-                // 機能行に触れたら展開を閉じてから通常処理
+            if (y >= rowTop(ROW_FUNC)) {
                 closeStrip()
             } else {
                 selecting = true
@@ -245,29 +322,39 @@ class SlideKeyboardView(context: Context) : View(context) {
             }
         }
 
+        // 予測候補行
+        if (rowAt(y) == ROW_CAND) {
+            downCand = candAt(x)
+            downKey = -1
+            invalidate()
+            return
+        }
+        downCand = -1
+
         downKey = keyAt(x, y)
-        when (downKey) {
-            in 0..9 -> {
-                strip = Strip.GYO; stripGyo = downKey
+        when {
+            downKey in 0..9 && japanese -> {
+                strip = Strip.GYO; stripIdx = downKey
                 persist = lock
-                selIdx = centerIndex()
+                selIdx = KanaTables.gyo[stripIdx].size
             }
-            K_NUM -> { strip = Strip.NUM; persist = lock; selIdx = 0 }
-            K_SYM -> { strip = Strip.SYM; persist = lock; selIdx = 0 }
-            K_DEL -> startDelRepeat()
-            K_FIX, K_HIDE -> scheduleLong(downKey)
+            downKey in K_ALPHA0..(K_ALPHA0 + 5) -> {
+                strip = Strip.ALPHA; stripIdx = downKey - K_ALPHA0
+                persist = lock
+                selIdx = 0
+            }
+            downKey == K_NUM -> { strip = Strip.NUM; persist = lock; selIdx = 0 }
+            downKey == K_SYM -> { strip = Strip.SYM; persist = lock; selIdx = 0 }
+            downKey == K_ROMAN -> { strip = Strip.ROMAN; persist = lock; selIdx = 0 }
+            downKey == K_DEL -> startDelRepeat()
+            downKey == K_FIX || downKey == K_HIDE -> scheduleLong(downKey)
         }
         invalidate()
     }
 
-    private fun centerIndex(): Int {
-        // GYO ストリップの中央（行頭ひらがな）位置 = 左カタカナ n 個の直後
-        return KanaTables.gyo[stripGyo].size
-    }
-
     private fun onMove(x: Float) {
         if (kotlin.math.abs(x - downX) > dp(6f)) moved = true
-        if (moved) { cancelLong() }
+        if (moved) cancelLong()
         if (selecting || (strip != Strip.NONE && !persist)) {
             selIdx = stripIndexAt(x)
             invalidate()
@@ -276,25 +363,29 @@ class SlideKeyboardView(context: Context) : View(context) {
 
     private fun onUp(committed: Boolean) {
         cancelLong(); cancelRepeat()
-        if (longFired) { downKey = -1; invalidate(); return }
+        if (longFired) { downKey = -1; downCand = -1; invalidate(); return }
 
-        // 保持ストリップのタップ選択確定
+        // 予測候補の確定
+        if (downCand >= 0) {
+            if (committed && downCand < candidates.size) listener?.onCandidate(candidates[downCand])
+            downCand = -1; invalidate(); return
+        }
+
         if (selecting) {
             if (committed) commitStrip()
             selecting = false; closeStrip(); invalidate(); return
         }
 
-        // スライド確定（非固定）
         if (strip != Strip.NONE && !persist) {
             if (committed) commitStrip()
             closeStrip(); invalidate(); return
         }
 
-        // 固定ONで今開いたばかり → 保持したまま何もしない
         if (strip != Strip.NONE && persist) { downKey = -1; invalidate(); return }
 
         if (committed) when (downKey) {
             K_FIX -> lock = !lock
+            K_MODE -> toggleMode()
             K_DAKU -> listener?.onTransformLast()
             K_SPACE -> listener?.onSpace()
             K_ENTER -> listener?.onEnter()
@@ -302,6 +393,13 @@ class SlideKeyboardView(context: Context) : View(context) {
         }
         downKey = -1
         invalidate()
+    }
+
+    private fun toggleMode() {
+        japanese = !japanese
+        context.getSharedPreferences("enkaku", Context.MODE_PRIVATE)
+            .edit().putBoolean("jp_mode", japanese).apply()
+        listener?.onModeChanged(japanese)
     }
 
     private fun commitStrip() {
