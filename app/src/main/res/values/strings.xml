@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Enkaku Keyboard</string>
+    <string name="ime_name">Enkaku ミニキーボード</string>
+    <string name="subtype_ja">日本語</string>
+    <string name="subtype_en">English</string>
+
+    <string name="setup_title">Enkaku ミニキーボード</string>
+    <string name="setup_desc">画面を専有しない、フリック入力の小さなキーボードです。使うには2ステップの設定が必要です。</string>
+    <string name="step1">1. キーボードを有効にする</string>
+    <string name="step2">2. 入力キーボードを Enkaku に切り替える</string>
+    <string name="btn_enable">キーボード設定を開く</string>
+    <string name="btn_switch">キーボードを切り替える</string>
+    <string name="try_hint">下の欄で試し打ちできます</string>
+    <string name="try_placeholder">ここで試し打ち</string>
+</resources>
