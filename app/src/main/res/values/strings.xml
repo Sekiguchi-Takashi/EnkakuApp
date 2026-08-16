@@ -13,4 +13,12 @@
     <string name="btn_switch">キーボードを切り替える</string>
     <string name="try_hint">下の欄で試し打ちできます</string>
     <string name="try_placeholder">ここで試し打ち</string>
+    <string name="learn_name">Enkaku 常駐学習</string>
+    <string name="learn_desc">どのキーボードで入力しても、確定した語をEnkakuの予測に学習させます。パスワード欄は学習しません。データは端末内にのみ保存されます。</string>
+    <string name="step3">3. 常駐学習（任意）</string>
+    <string name="btn_learn">常駐学習を有効にする</string>
+    <string name="learn_hint">Gboardなど他のキーボードで打った語も予測に取り込みます</string>
+    <string name="step4">4. Gboard単語リストの取り込み（任意）</string>
+    <string name="btn_import">エクスポートしたZIPを取り込む</string>
+    <string name="import_hint">Gboardの設定 → 単語リスト → エクスポートで作ったZIPを選んでください</string>
 </resources>
