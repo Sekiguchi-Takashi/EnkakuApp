@@ -107,6 +107,10 @@ class SlideKeyboardView(context: Context) : View(context) {
     private var downX = 0f
     private var moved = false
 
+    // 空白キー上のスライドでカーソル移動
+    private var spaceDragBase = 0f
+    private var spaceMoved = false
+
     private val handler = Handler(Looper.getMainLooper())
     private var longRunnable: Runnable? = null
     private var repeatRunnable: Runnable? = null
@@ -432,6 +436,7 @@ class SlideKeyboardView(context: Context) : View(context) {
             downKey == K_NUM -> { strip = Strip.NUM; persist = lock; selIdx = 0 }
             downKey == K_SYM -> { strip = Strip.SYM; persist = lock; selIdx = 0 }
             downKey == K_ROMAN -> { strip = Strip.ROMAN; persist = lock; selIdx = 0 }
+            downKey == K_SPACE -> { spaceDragBase = x; spaceMoved = false }
             downKey == K_DEL -> startDelRepeat()
             downKey == K_FIX || downKey == K_HIDE || downKey == K_DAKU -> scheduleLong(downKey)
         }
@@ -441,6 +446,20 @@ class SlideKeyboardView(context: Context) : View(context) {
     private fun onMove(x: Float) {
         if (kotlin.math.abs(x - downX) > dp(6f)) moved = true
         if (moved) cancelLong()
+        if (downKey == K_SPACE) {
+            val step = dp(14f)
+            while (x - spaceDragBase > step) {
+                listener?.onCursor(false)
+                spaceDragBase += step
+                spaceMoved = true
+            }
+            while (spaceDragBase - x > step) {
+                listener?.onCursor(true)
+                spaceDragBase -= step
+                spaceMoved = true
+            }
+            if (spaceMoved) { invalidate(); return }
+        }
         if (selecting || (strip != Strip.NONE && !persist)) {
             selIdx = stripIndexAt(x)
             invalidate()
@@ -478,7 +497,7 @@ class SlideKeyboardView(context: Context) : View(context) {
             K_FIX -> lock = !lock
             K_MODE -> toggleMode()
             K_DAKU -> listener?.onTransformLast()
-            K_SPACE -> listener?.onSpace()
+            K_SPACE -> if (!spaceMoved) listener?.onSpace()
             K_ENTER -> listener?.onEnter()
             K_HIDE -> listener?.onHide()
         }
