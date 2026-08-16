@@ -4,6 +4,8 @@ import android.app.Dialog
 import android.content.Intent
 import android.graphics.Color
 import android.inputmethodservice.InputMethodService
+import android.net.Uri
+import android.provider.Settings
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -14,6 +16,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 
 class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboardView.Listener {
 
@@ -203,6 +206,10 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
         ll.addView(menuButton("テキストモード" + if (cur == Converter.MODE_TEXT) " ●" else "") {
             dismissDialog(); setMode(Converter.MODE_TEXT)
         })
+        val mouseOn = LearnService.instance?.isMouseOn() == true
+        ll.addView(menuButton("マウスモード" + if (mouseOn) " ●" else "") {
+            dismissDialog(); startMouseMode()
+        })
         ll.addView(menuButton("閉じる") { dismissDialog() })
 
         val d = Dialog(this)
@@ -211,6 +218,26 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
             val imm = getSystemService(InputMethodManager::class.java)
             imm?.showInputMethodPicker()
         }
+    }
+
+    private fun startMouseMode() {
+        val svc = LearnService.instance
+        if (svc == null) {
+            Toast.makeText(this, "先に「常駐学習（ユーザー補助）」をONにしてください", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        }
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "「他のアプリの上に表示」を許可してください", Toast.LENGTH_LONG).show()
+            startActivity(Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:" + packageName)
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        }
+        requestHideSelf(0)
+        svc.toggleMouse()
     }
 
     private fun wrapScroll(v: View): View {

@@ -1,13 +1,85 @@
 package com.appathy.enkaku
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
 import android.view.accessibility.AccessibilityEvent
 
 // 常駐学習サービス。
 // どのキーボード（Gboard含む）で入力しても、画面上のテキスト変化から
 // 「かな読み → 確定文字列」を拾って本アプリのPredictorに学習させる。
 // パスワード欄は必ず除外し、学習データは端末内（SharedPreferences）にのみ保存する。
-class LearnService : AccessibilityService() {
+class LearnService : AccessibilityService(), MouseOverlay.Actions {
+
+    companion object {
+        // 実行中のサービス参照（IMEのメニューからマウスモードを起動するため）
+        var instance: LearnService? = null
+    }
+
+    private var mouse: MouseOverlay? = null
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+    }
+
+    override fun onDestroy() {
+        mouse?.hide()
+        if (instance === this) instance = null
+        super.onDestroy()
+    }
+
+    // ---- マウスモード ----
+
+    fun toggleMouse(): Boolean {
+        val m = mouse ?: MouseOverlay(this).also { it.actions = this; mouse = it }
+        return m.toggle()
+    }
+
+    fun isMouseOn(): Boolean = mouse?.isShowing() == true
+
+    private fun tapPath(x: Float, y: Float): Path {
+        val p = Path(); p.moveTo(x, y); return p
+    }
+
+    override fun click(x: Float, y: Float) {
+        val g = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(tapPath(x, y), 0, 60))
+            .build()
+        dispatchGesture(g, null, null)
+    }
+
+    override fun doubleClick(x: Float, y: Float) {
+        val first = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(tapPath(x, y), 0, 50)).build()
+        dispatchGesture(first, object : GestureResultCallback() {
+            override fun onCompleted(d: GestureDescription?) {
+                val second = GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(tapPath(x, y), 40, 50)).build()
+                dispatchGesture(second, null, null)
+            }
+        }, null)
+    }
+
+    override fun scroll(x: Float, y: Float, up: Boolean) {
+        val dm = resources.displayMetrics
+        val dist = dm.heightPixels * 0.35f
+        val path = Path()
+        if (up) {
+            // 上スクロール = 内容を上へ = 指を下から上へ
+            path.moveTo(x, y); path.lineTo(x, (y - dist).coerceAtLeast(0f))
+        } else {
+            path.moveTo(x, y); path.lineTo(x, (y + dist).coerceAtMost(dm.heightPixels.toFloat()))
+        }
+        val g = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 250)).build()
+        dispatchGesture(g, null, null)
+    }
+
+    override fun back() {
+        performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+
 
     // 直近のテキスト（画面上の入力欄ごとに1つ。欄の判別はwindowId+viewIdで代用）
     private val lastText = HashMap<Long, String>()
