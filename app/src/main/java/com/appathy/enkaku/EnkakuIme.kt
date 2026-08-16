@@ -66,6 +66,22 @@ class EnkakuIme : InputMethodService(), FlickKeyboardView.Listener, SlideKeyboar
         refreshCandidates()
     }
 
+    // ユーザーがカーソルを動かす等でbufferと実テキストがずれたら読みを破棄する
+    // （ずれたままにすると候補確定時のdeleteSurroundingTextが無関係な文字を消す）
+    override fun onUpdateSelection(
+        oldSelStart: Int, oldSelEnd: Int,
+        newSelStart: Int, newSelEnd: Int,
+        candidatesStart: Int, candidatesEnd: Int
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        if (buffer.isEmpty()) return
+        val before = currentInputConnection?.getTextBeforeCursor(buffer.length, 0)
+        if (before == null || !before.toString().endsWith(buffer.toString())) {
+            buffer.setLength(0)
+            refreshCandidates()
+        }
+    }
+
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         dismissDialog()

@@ -451,9 +451,9 @@ class SlideKeyboardView(context: Context) : View(context) {
         cancelLong(); cancelRepeat()
         if (longFired) { downKey = -1; downCand = -1; invalidate(); return }
 
-        // マルチモニタの確定
+        // マルチモニタの確定（スライドして離した場合は確定しない）
         if (downCand >= 0) {
-            if (committed) {
+            if (committed && !moved) {
                 if (textMode) listener?.onTextSlot(downCand + 1)
                 else if (downCand < candidates.size) listener?.onCandidate(candidates[downCand])
             }
@@ -472,6 +472,7 @@ class SlideKeyboardView(context: Context) : View(context) {
 
         if (strip != Strip.NONE && persist) { downKey = -1; invalidate(); return }
 
+        if (committed && moved && downKey == K_MENU) { downKey = -1; invalidate(); return }
         if (committed) when (downKey) {
             K_MENU -> listener?.onMenu()
             K_FIX -> lock = !lock
