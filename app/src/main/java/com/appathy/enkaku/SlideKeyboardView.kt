@@ -44,7 +44,6 @@ class SlideKeyboardView(context: Context) : View(context) {
     private val colStrip = Color.parseColor("#0F1620")
     private val colSel = Color.parseColor("#5B9BD5")
     private val colKata = Color.parseColor("#9AB8D6")
-    private val colMark = Color.parseColor("#C9A15B")
     private val colCand = Color.parseColor("#243444")
     private val colCandText = Color.parseColor("#FFD9A0")
     private val colHint = Color.parseColor("#5A6B7C")
@@ -181,6 +180,14 @@ class SlideKeyboardView(context: Context) : View(context) {
         Strip.ROMAN -> KanaTables.romanStrip
         Strip.NONE -> emptyList()
     }
+
+    // ストリップの表示リスト（数字のときだけ右端に固定セルを足す）
+    private fun stripDisplayList(): List<String> {
+        val base = currentStripList()
+        return if (strip == Strip.NUM) base + listOf("固定") else base
+    }
+
+    private fun numPinIndex(): Int = currentStripList().size
 
     private fun label(id: Int): String = when (id) {
         in 0..9 -> KanaTables.gyoHeads[id]
@@ -319,7 +326,7 @@ class SlideKeyboardView(context: Context) : View(context) {
     }
 
     private fun drawStrip(c: Canvas) {
-        val list = currentStripList()
+        val list = stripDisplayList()
         if (list.isEmpty()) return
         val n = list.size
         val cellW = (width - gap * (n + 1)) / n
@@ -329,10 +336,16 @@ class SlideKeyboardView(context: Context) : View(context) {
             val l = gap + i * (cellW + gap)
             val r = RectF(l, top, l + cellW, top + h)
             val sel = (i == selIdx)
-            roundKey(c, r, if (sel) colSel else colStrip)
+            val pin = (strip == Strip.NUM && i == numPinIndex())
+            val bgc = when {
+                pin && persist -> colDown
+                pin -> colFunc
+                sel -> colSel
+                else -> colStrip
+            }
+            roundKey(c, r, bgc)
             val t = list[i]
             val color = when {
-                strip == Strip.NUM && (t == "0" || t == "5") -> colMark
                 strip == Strip.GYO && isKatakana(t) -> colKata
                 else -> colText
             }
@@ -374,7 +387,7 @@ class SlideKeyboardView(context: Context) : View(context) {
     }
 
     private fun stripIndexAt(x: Float): Int {
-        val n = currentStripList().size
+        val n = stripDisplayList().size
         if (n == 0) return 0
         val cellW = (width - gap * (n + 1)) / n
         val i = ((x - gap) / (cellW + gap)).toInt()
@@ -393,11 +406,23 @@ class SlideKeyboardView(context: Context) : View(context) {
 
     private fun onDown(x: Float, y: Float) {
         downX = x; moved = false; longFired = false
+        downKey = -1; downCand = -1
         cancelLong(); cancelRepeat()
 
         // 保持ストリップが開いている
         if (strip != Strip.NONE && persist) {
             if (y >= rowTop(ROW_FUNC)) {
+                if (strip == Strip.NUM) {
+                    downKey = keyAt(x, y)
+                    if (downKey == K_NUM) { closeStrip(); invalidate(); return }
+                    when (downKey) {
+                        K_SPACE -> { spaceDragBase = x; spaceMoved = false }
+                        K_DEL -> startDelRepeat()
+                        K_FIX, K_HIDE, K_DAKU -> scheduleLong(downKey)
+                    }
+                    invalidate()
+                    return
+                }
                 closeStrip()
             } else {
                 selecting = true
@@ -480,16 +505,33 @@ class SlideKeyboardView(context: Context) : View(context) {
         }
 
         if (selecting) {
+            if (strip == Strip.NUM) {
+                if (committed && selIdx == numPinIndex()) {
+                    selecting = false; closeStrip(); invalidate(); return
+                }
+                if (committed) commitStrip()
+                selecting = false
+                invalidate(); return
+            }
             if (committed) commitStrip()
             selecting = false; closeStrip(); invalidate(); return
         }
 
         if (strip != Strip.NONE && !persist) {
+            if (committed && strip == Strip.NUM && selIdx == numPinIndex()) {
+                persist = true
+                downKey = -1
+                invalidate(); return
+            }
             if (committed) commitStrip()
             closeStrip(); invalidate(); return
         }
 
-        if (strip != Strip.NONE && persist) { downKey = -1; invalidate(); return }
+        val opener = downKey in 0..9 || downKey in K_ALPHA0..(K_ALPHA0 + 5) ||
+            downKey == K_NUM || downKey == K_SYM || downKey == K_ROMAN
+        if (strip != Strip.NONE && persist && (opener || downKey == -1)) {
+            downKey = -1; invalidate(); return
+        }
 
         if (committed && moved && downKey == K_MENU) { downKey = -1; invalidate(); return }
         if (committed) when (downKey) {
